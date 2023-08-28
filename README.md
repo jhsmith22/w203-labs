@@ -1,6 +1,10 @@
 # w203-labs
 This repository contains 2 lab reports I contributed to as part of a master-level course: Statistics for Data Science (W203) at the University of California Berkeley.
 
+**Lab 1 Group Members and My Contribution**: Jessica Stockham (me), Heaven Klair, Josie Ruggieri. In this group project, I did nearly all the coding and report writing. Other group members contributed visualizations and brainstorming.
+
+**Lab 2 Group Members and My Contribution**: Jessica Stockham (me), Derrick Chan-Sew, Jammy Chan (Chi Hung). In this group project, I authored the final report, including a detailed discussions and limitations section. I also wrote code to clean/prepare predictive features and test the statistical assumptions in our model. Other group members wrote the code to extract the data, store necessary variables, perform exploratory data analysis, and run the linear regression models.
+
 # Lab 1 Abstract
 Just like the COVID-19, the US 2020 elections raised unprecedented challenges for its citizens. While the
 nation was still recovering from the pandemic, the Americans, amongst the turmoil, stood up to cast their
@@ -20,7 +24,6 @@ We utilize data from the 2020 American National Election Studies (ANES), which s
 occurred on Nov 8, 2020 (Nov 8, 2020 - Jan 4, 2021). It was a survey of non-institutionalized U.S. citizens
 age 18 and older.
 
-Group Members: Jessica Stockham (me), Heaven Klair, Josie Ruggieri. In this group project, I did nearly all the coding and report writing. Other group members contributed visualizations and brainstorming.
 
 # Lab 2 Abstract
 Real estate prices have seen a recent surge in pricing in an increasingly competitive market. While there is
@@ -39,5 +42,4 @@ areas, using dues collected from residents to repair, maintain, or replace commu
 affect property value over time. This research creates and evaluates a set of regression models then uses
 the selected model to estimate home value from HOA paid for a property.
 
-Group Members: Jessica Stockham (me), Derrick Chan-Sew, Jammy Chan (Chi Hung). In this group project, I authored the final report, including a detailed discussions and limitations section. I also wrote code to clean/prepare predictive features and test the statistical assumptions in our model. Other group members wrote the code to extract the data, store necessary variables, perform exploratory data analysis, and run the linear regression models.
 
