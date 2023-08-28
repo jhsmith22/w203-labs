@@ -1,0 +1,278 @@
+---
+title: "Statistical Analysis "
+subtitle: "W203: Lab 1"
+author: "Jessica, Josie and Heaven" 
+output:
+  bookdown::pdf_document2: 
+    toc: true
+    number_sections: true
+---
+
+\newpage
+\setcounter{page}{1}
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(haven)
+library(dplyr)
+library(tidyverse) 
+library(magrittr)
+library(knitr)
+library(patchwork)
+library(moments)
+
+theme_set(theme_bw())
+
+options(tinytex.verbose = TRUE)
+knitr::opts_chunk$set(echo=FALSE, message=FALSE)
+```
+
+
+```{r load data}
+anes <- read_dta('anes_timeseries_2020_stata_20220210.dta')
+```
+
+# Importance and Context
+
+Just like the COVID-19, the US 2020 elections raised unprecedented challenges for its citizens. While the nation was still recovering from the pandemic, the Americans, amongst the turmoil, stood up to cast their vote and fulfill the needs to democracy. Access to voting, a discussion rooted in our countries' racist history, was once again a heated political topic. In particular,  Democrat commentators argued that Republicans used a variety of tactics to make it more difficult for likely Democrat voters to actually submit their ballots. For example, there are allegations of limited voting hours, fewer voting locations, staffing issues that lead to long lines, and sparse drop-boxes for absentee ballot drops. If such speculation is true, we should be concerned about the integrity of our elections. As a first step, this statistical analysis looks to nationally representative survey data to gain insight from voters themselves on the situation on the ground in the 2020 election to answer the question of interest: 
+
+\begin{quote}
+  \textit{Did Democrat-leaning or Republican-leaning voters claim to have more difficulty voting in the 2020 election?}
+\end{quote}
+
+We utilize data from the 2020 American National Election Studies (ANES), which surveyed a nationally-representative set of respondents before (Aug 18, 2020 - Nov 3, 2020) and after the 2020 national election that occurred on Nov 8, 2020 (Nov 8, 2020 - Jan 4, 2021). It was a survey of non-institutionalized U.S. citizens age 18 and older. 
+
+# Methodology
+
+Conceptually, we think of a *voter* as broadly someone is eligible to vote and has some intention of participating in the election process, regardless on if they actually cast a vote. We believe registering to vote signals an intention of voting. Based on this definition, we believe individuals who registered to vote (or said that they plan to register to vote) should be classified as voters.  Our ideal measure would include individuals who voted, registered individuals who did not vote, and individuals who planned to register but did not manage to do so. By including registered voters (or those who planned to register), we can more fully understand how difficulties in the voting process may have deterred individuals from voting.
+
+We think of a *Republican* or *Democrat party-affiliation*  as someone who leans toward either the Republican or Democrat party in their voting preferences. Since we think of voters broadly of those who had an intention of voting, rather than just those who managed to vote, we do not want to restrict our definition to actual votes for one party or the other on the ballot.
+
+Last, we think of *difficulties* in voting quite broadly. These can vary from personal circumstances such as work schedules, care for small children, illness, or bad weather to more structural issues around the voting infrastructure, such as confusion about how to request an absentee ballot, not having the proper documentation to register, not meeting registration deadlines, a long commute to a polling site from your house, and limited hours of a polling site. Each of these individual items would require a separate measurement. We would want to know "how" big a barrier each of these things actually is, measuring them quantitatively. For example, we could measure distance to a polling site in terms of minutes of commute time; total hours or days voting booths in a county are open; or compare how voting registration deadlines are across states.
+
+Our survey dataset is not sufficient to measure the ideal version of these concepts, however there are useful proxies. To measure "difficulty of voting", we are using the post-election survey question: "How difficult was it for you to vote?" (V202119) from ANES that had 5 categories: Not difficult at all, a little difficult, moderately difficult, very difficult, and extremely difficult. We specify our "difficulty" measure as an ordinal variable with the values of 1 through 5 that map back to the survey question categories, where 1 = Not difficult at all and 5 = extremely difficult. This question is a good proxy because it broadly encompasses any difficulties an individual may have had, personal or voting-infrastructure related. The disadvantage of this survey question is that it is only asked of respondents who actually voted in the Nov 2020 election. Individuals who may have planned to vote but faced substantial enough barriers doing so, either while trying to register or trying to vote, are excluded. Self-reports can also be subject to recall or social-desirability bias.
+
+Since our "difficulty" survey measure is constrained to those who voted, our operational definition of voters is also narrowed to just those who voted. This includes both the pre-survey (V201023) and post-survey (V202066) questions with respondents who said "Yes, voted" or "I am sure I voted". This of course excludes respondents who may have intended to vote but had difficulty doing so. Furthermore, the survey has a sequence of questions we used categorize respondents who have a preference for the Democrat or Republican parties in the pre-survey (V201228, V201230). We labeled respondents as Democrats who said they "think of themselves as a Democrats" or "think of themselves closer to the Democrat party." We labeled respondents as Republicans who said they "think of themselves as a Republican" or "think of themselves closer to the Republican party. Our party variable is a categorical variable where 1 = Republicans and 2 = Democrats.
+
+From the total survey sample of 8,280 respondents, there are 7,282 that classified themselves as either a Republican or Democrat. Once we filter the sample down to those who voted in the 2020 election, the sample is 5,874. Then, our final sample includes voters who answered the difficulty question, which dropped down to 5,831 respondents (2,700 Republicans and 3,131 Democrats). 
+
+We show two charts to provide an understanding of the data. On the left, we should how Democrats and Republicans rated themselves on the voting difficulty score. The distributions look similar with most voters having no difficulty at all. Among voters that had at least a little difficulty, it is unclear if Republicans or Democrats have more difficulty. The chart on the right shows different problems voters mentioned when voting. We see again similar distributions for Republican and Democrats and the top problem for both groups is long wait times. We will move next to a statistical test to discern if there are meaningful differences by party.
+
+```{r, results = 'hide'}
+data <- anes %>%
+  mutate(
+    # party (1 = republican, 2 = democrat, NA otherwise)
+    # combine 2 pre-survey questions: V201230 & V201228
+    party = case_when(
+      V201230 == 1 ~ 1,
+      V201230 == 3 ~ 2,
+      V201228 == 1 ~ 2,
+      V201228 == 2 ~ 1),
+    # voted = 1 if voted, NA otherwise
+    voted = case_when(
+        V202066 == 4 ~ 1,
+        V201023 == 1 ~ 1),
+    # difficult (ordinal scale 1-5)
+    difficult = case_when(
+      V202119 == 1 ~ 1,
+      V202119 == 2 ~ 2,
+      V202119 == 3 ~ 3,
+      V202119 == 4 ~ 4,
+      V202119 == 5 ~ 5)
+    )
+
+cleaned_df = data[c('V201230','V201228', 'V202119')]
+cleaned_df = cleaned_df %>%
+rename(
+  difficulty = V202119,
+  party_closest = V201230,
+  party_id = V201228
+  )
+cleaned_df = cleaned_df[ (cleaned_df$difficulty %in% c(1,2,3,4,5)), ]
+cleaned_df$difficulty <- as.character(cleaned_df$difficulty)
+
+cleaned_df$difficulty[cleaned_df$difficulty == '1'] <- '1. Not Difficul'
+cleaned_df$difficulty[cleaned_df$difficulty ==  '2'] <- '2. Difficult'
+cleaned_df$difficulty[cleaned_df$difficulty ==  '3'] <- '2. Difficult'
+cleaned_df$difficulty[cleaned_df$difficulty ==  '4'] <- '2. Difficult'
+cleaned_df$difficulty[cleaned_df$difficulty ==  '5'] <- '2. Difficult'
+
+cleaned_df = cleaned_df[(cleaned_df$party_id %in% c(1,2)) | (cleaned_df$party_closest %in% c(1,3)),]
+cleaned_df$party = ifelse((cleaned_df$party_id == 1) | (cleaned_df$party_closest == 3), 'Rep', 'Dem')
+cleaned_df$party_closest = NULL
+cleaned_df$party_id = NULL
+cleaned_dif = cleaned_df
+cleaned_dif = cleaned_dif %>% filter(difficulty != "1. Not Difficult at All", na.rm = TRUE)
+
+plot_1 <- ggplot(cleaned_dif, aes(x= difficulty,  group=party)) + 
+  geom_bar(aes(y = ..prop.., fill = (party)), stat="count") +
+  geom_text(aes( label = scales::percent(..prop.., accuracy = 0.1),
+                 y= ..prop.. ), stat= "count", vjust = 1.5) +
+  labs(y = "Percent of Voters", x = "Difficulty in Voting") +
+  facet_grid(~party) +
+  scale_y_continuous(labels = scales::percent) +
+  ggtitle('Democracts vs Republican Voters')
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```  
+  
+```{r, include=FALSE}
+difficulties = function(data){
+    # select columns we need and rename them
+  cleaned_df = data[c('V201230','V201228', 'V202120a', 'V202120b', 'V202120c', 'V202120d', 
+                    'V202120e', 'V202120f', 'V202120g', 'V202120h', 'V202120i', 'V202120j' )] 
+  cleaned_df = cleaned_df %>%
+  rename(
+    party_closest = V201230,
+    party_id = V201228,
+    party_closest = V201230,
+    party_id = V201228,
+    reg_problem = V202120a,
+    concern_ID_card = V202120b,
+    diff_in_obt_absentee_ballot = V202120c,
+    confuse_about_ballot = V202120d,
+    diff_getting_to_polling_place = V202120e,
+    long_wait_lines = V202120f,
+    work_schedule = V202120g,
+    bad_weather = V202120h,
+    issue_in_mailing_ballot = V202120i,
+    other_problems = V202120j
+  )
+  cleaned_df = cleaned_df[(cleaned_df$party_id %in% c(1,2)) | (cleaned_df$party_closest %in% c(1,3)),]
+  cleaned_df$party = ifelse((cleaned_df$party_id == 1) | (cleaned_df$party_closest == 3), "Dem", "Rep")
+  cleaned_df$party_closest = NULL
+  cleaned_df$party_id = NULL
+ 
+  return(cleaned_df) }
+
+data_11 = difficulties(data)
+  
+  cleaned_df1 = data_11[c('party', 'reg_problem' )]
+  cleaned_df1 = cleaned_df1 %>%
+        filter(reg_problem == 1 )
+  cleaned_df1$reg_problem <- as.character(cleaned_df1$reg_problem)
+  cleaned_df1["reg_problem"][cleaned_df1["reg_problem"] == '1'] <- 'reg_problem'
+  cleaned_df1$col_of_ones = 1
+  data1 <- cleaned_df1 %>% rename(
+    reason_for_difficulty = reg_problem)
+  cleaned_df2 = data_11[c('party', 'concern_ID_card')]
+  cleaned_df2 = cleaned_df2 %>%
+        filter(concern_ID_card == 1 ) 
+  cleaned_df2$concern_ID_card <- as.character(cleaned_df2$concern_ID_card)
+  cleaned_df2["concern_ID_card"][cleaned_df2["concern_ID_card"] == '1'] <- 'concern_ID_card'
+  cleaned_df2$col_of_ones = 1
+  data2 <- cleaned_df2 %>% rename(
+    reason_for_difficulty = concern_ID_card)
+  cleaned_df3 = data_11[c('party', 'diff_in_obt_absentee_ballot' )]
+  cleaned_df3 = cleaned_df3 %>%
+        filter(diff_in_obt_absentee_ballot == 1 )
+  cleaned_df3$diff_in_obt_absentee_ballot <- as.character(cleaned_df3$diff_in_obt_absentee_ballot)
+  cleaned_df3["diff_in_obt_absentee_ballot"][cleaned_df3["diff_in_obt_absentee_ballot"] == '1'] <- 'diff_in_obt_absentee_ballot'
+  cleaned_df3$col_of_ones = 1
+  data3 <- cleaned_df3 %>% rename(
+    reason_for_difficulty = diff_in_obt_absentee_ballot)
+  cleaned_df4 = data_11[c('party', 'confuse_about_ballot' )]
+  cleaned_df4 = cleaned_df4 %>%
+        filter(confuse_about_ballot == 1 )
+  cleaned_df4$confuse_about_ballot <- as.character(cleaned_df4$confuse_about_ballot)
+  cleaned_df4["confuse_about_ballot"][cleaned_df4["confuse_about_ballot"] == '1'] <- 'confuse_about_ballot'
+  cleaned_df4$col_of_ones = 1
+  data4 <- cleaned_df4 %>% rename(
+    reason_for_difficulty = confuse_about_ballot)
+  cleaned_df5 = data_11[c('party','diff_getting_to_polling_place' )]
+  cleaned_df5 = cleaned_df5 %>%
+        filter(diff_getting_to_polling_place == 1 )
+  cleaned_df5$diff_getting_to_polling_place <- as.character(cleaned_df5$diff_getting_to_polling_place)
+  cleaned_df5["diff_getting_to_polling_place"][cleaned_df5["diff_getting_to_polling_place"] == '1'] <- 'diff_getting_to_polling_place'
+  cleaned_df5$col_of_ones = 1
+  data5 <- cleaned_df5 %>% rename(
+    reason_for_difficulty = diff_getting_to_polling_place)
+  cleaned_df6 = data_11[c('party', 'long_wait_lines' )]
+  cleaned_df6 = cleaned_df6 %>%
+        filter(long_wait_lines == 1 )
+  cleaned_df6$long_wait_lines <- as.character(cleaned_df6$long_wait_lines)
+  cleaned_df6["long_wait_lines"][cleaned_df6["long_wait_lines"] == '1'] <- 'long_wait_lines'
+  cleaned_df6$col_of_ones = 1
+  data6 <- cleaned_df6 %>% rename(
+    reason_for_difficulty = long_wait_lines)
+  cleaned_df7 = data_11[c('party', 'work_schedule' )]
+  cleaned_df7 = cleaned_df7 %>%
+        filter(work_schedule == 1 )
+  cleaned_df7$work_schedule <- as.character(cleaned_df7$work_schedule)
+  cleaned_df7["work_schedule"][cleaned_df7["work_schedule"] == '1'] <- 'work_schedule'
+  cleaned_df7$col_of_ones = 1
+  data7 <- cleaned_df7 %>% rename(
+    reason_for_difficulty = work_schedule)
+  cleaned_df8 = data_11[c('party', 'bad_weather' )]
+  cleaned_df8 = cleaned_df8 %>%
+        filter(bad_weather == 1 )
+  cleaned_df8$bad_weather <- as.character(cleaned_df8$bad_weather)
+  cleaned_df8["bad_weather"][cleaned_df8["bad_weather"] == '1'] <- 'bad_weather'
+  cleaned_df8$col_of_ones = 1
+  data8 <- cleaned_df8 %>% rename(
+    reason_for_difficulty = bad_weather)
+  cleaned_df9 = data_11[c('party', 'issue_in_mailing_ballot' )]
+  cleaned_df9 = cleaned_df9 %>%
+        filter(issue_in_mailing_ballot == 1 )
+  cleaned_df9$issue_in_mailing_ballot <- as.character(cleaned_df9$issue_in_mailing_ballot)
+  cleaned_df9["issue_in_mailing_ballot"][cleaned_df9["issue_in_mailing_ballot"] == '1'] <- 'issue_in_mailing_ballot'
+  cleaned_df9$col_of_ones = 1
+  data9 <- cleaned_df9 %>% rename(
+    reason_for_difficulty = issue_in_mailing_ballot)
+  cleaned_df10 = data_11[c('party', 'other_problems' )]
+  cleaned_df10 = cleaned_df10 %>%
+        filter(other_problems == 1 )
+  cleaned_df10$other_problems <- as.character(cleaned_df10$other_problems)
+  cleaned_df10["other_problems"][cleaned_df10["other_problems"] == '1'] <- 'other_problems'
+  cleaned_df10$col_of_ones = 1
+  data10 <- cleaned_df10 %>% rename(
+    reason_for_difficulty = other_problems)
+grouped_data <- rbind(data1,data2,data3,data4,data5,data6,data7,data8,data9,data10)
+
+plot_2 <- ggplot(grouped_data, aes(x= reason_for_difficulty,  group=party)) + 
+  geom_bar(aes(y = ..prop.., fill = party), stat="count") +
+  geom_text(aes( label = scales::percent(..prop.., accuracy = 0.1),
+                 y= ..prop.. ), stat= "count", angle = 90, vjust = -.5) +
+  labs(y = "Percent", x = "Reasons for Difficulty") +
+  facet_grid(~party) +
+  scale_y_continuous(labels = scales::percent) +
+  ggtitle('Democracts vs Republican Voters') +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r, fig.width=14, fig.height=5, echo=F}
+plot_1 | plot_2
+```
+
+# Methodology/Hypothesis Testing
+
+We are using the non-parametric Wilcox Rank Test (hypothesis of comparisons version) to do our statistical test. This test is appropriate because we are comparing two groups (Democrats and Republicans) on a ordinal outcome variable (difficulty score). Other standard 2-sample tests require metric data.
+
+There are two key assumptions for the Wilcox Rank Test test to provide valid inferences. The first is that we are measuring our outcome on an ordinal scale. Our outcome variable (difficulty voting) is indeed on an ordinal scale (values have a meaningful order ranging from 1 to 5). Second, our data must be independent and identically distributed (iid). It is reasonable to assume the sample is iid because the respondents were randomly-selected across the country by a professional survey firm. With a true random sample across the whole country, we can believe that a given respondent does not influence a subsequent respondent's answer to the survey. Our null hypothesis is as follows:
+
+\begin{quote}
+  \textbf{Null Hypothesis}: \textit{The probability that a difficulty score for a Republican is less than the difficulty score for a Democrat is equal to the probability that a difficulty score for a Republican is greater than a difficulty score for a Republican.}
+\end{quote}
+
+# Results
+
+```{r wilcox-test, echo=T, results = 'hide'} 
+wilcox.test(anes$difficult ~ anes$party, 
+            alternative = "two.sided", paired=FALSE, exact=FALSE, use = "complete")
+```
+
+The test shows that there is a statistically significant difference in the difficulty of voting between Republicans and Democrats (p-value = 0.003687). We can reject the null hypothesis at a 99% confidence level (i.e., there is only a 1% chance that we are rejecting the null hypothesis when we should not). 
+
+Some limitations of our test affect the conclusions drawn from the analysis. Foremost, this test only indicates correlation (not causation) between party and difficulty voting. It does also not hint at why we might be seeing a difference. It is possible that the driver is actually a third factor (e.g., socioeconomics) that is correlated with party affiliation. From here, we can analyze more deeply which party experienced more difficulty while voting. In addition, we are only seeing a subset of all voters. This measure only captures those who responded to this survey (only roughly a 30 percent response rate), voted, and answered the difficulty question on the post-survey. Each step reduces the sample farther away from our ideal comprehensive conception of a "voter" we described above. Furthermore, because we did not apply the survey weights, the result is also not generalizable to the full U.S. population. 
+
+# Discussion
+
+```{r Spearman Correlation, include=FALSE}
+cor(anes$difficult, anes$party, use = "complete", method="spearman")
+```
+
+This study found that party affiliation is associated with voting difficulty. From a pragmatic lens, we are interested in both the direction and magnitude of this trend. Using Spearman's Correlation, we found that in possible pairings of a Democrat and Republican, only 3.8% of the time, Democrats had more difficulty voting than Republicans. Taken together with the Wilcox Rank Test, we find that while there is a statistically significant difference in difficult scores between Democrats and Republicans, the magnitude of this difference is quite small. It is of little practical explainatory value. This could be due to either the limitations of the survey data or that another factor (e.g., socioeconomics) actually drives this difference.
+
+Our descriptive analysis looked at what proportion of voters who reported difficulty in voting came from each party, what were reasons potential voters did not in fact vote, and why did voters find voting difficult. One interesting insight that stemmed from the comparison of voters who answer the difficulty question with at “some what difficult” and at most “extremely difficult”: more Republicans voted on the lower side of difficulty than Democrats, but more the opposite is true as the difficulty level increased (although a smaller proportion responded each as the level progressed). Another interesting observation came from the question of why did a potential-voter not vote. Here we can see a much greater portion of Democrats were not registered, and yet, less Democrats responded that they were merely not interested. More Democrats also responded that they were either sick/disabled or too busy to vote, reinforcing the contrast that Republicans chose not to vote because of personal decisions but Democrats had difficulty voting.
+
+In future steps, we hope to do a further analysis of party affiliation and other factors that may better explain why certain groups of voters have more trouble voting than others. We wish to study the party affiliation driver with better data, such as with a more comprehensive definition of voters (i.e., include registered voters and those who intended to register). Moore feature engineering can be done to capture voting behavior of lean Democrats or lean Republicans. Using further data outside of the ANES report, we could more accurately look into causes for the difference in voting.
+

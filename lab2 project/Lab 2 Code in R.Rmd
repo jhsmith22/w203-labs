@@ -1,0 +1,712 @@
+---
+title: 'Estimating the Market Value of HOA Prices'
+author: "Jessica Stockham, Derrick Chan-Sew, Jammy Chan (Chi Hung)"
+output:
+  pdf_document:
+    toc: no
+    number_sections: no
+  html_document:
+    toc: yes
+    df_print: paged
+urlcolor: blue
+---
+```{r load packages and set options, include=FALSE, echo = FALSE}
+library(tidyverse)
+library(haven)
+library(knitr)
+library(ggplot2)
+library(dplyr)
+library(sandwich)
+library(lmtest)
+library(corrplot)
+library(gridExtra)
+library(stargazer)
+library(e1071)
+#install.packages('patchwork') 
+library(patchwork)
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, fig.width = 12,fig.height = 4)
+#ahs <- read_csv("/home/rstudio/DATASCI-W203/lab2/ahs2021n_national.csv")
+#ahs <- read_csv("/home/rstudio/DATASCI-W203/lab2/ahs2021raw_sc.csv")
+#ahs <- read_csv("ahs2021raw_sc.csv")
+ahs <- read_csv("ahs2021raw_sc_1.csv")
+#ahs_p <- ahs %>% select(MARKETVAL, HOAAMT, YRBUILT, BLD, RATINGNH, UNITSIZE, TOTROOMS, BEDROOMS, LOTSIZE, RATINGHS, BATHROOMS, OMB13CBSA, NHQSCHOOL, NHQPCRIME, NHQRISK, GARAGE, WEIGHT)
+#write.csv(ahs_p, "/home/rstudio/DATASCI-W203/lab2/ahs2021raw_sc.csv", row.names=TRUE)
+#write.csv(ahs_p, "/home/rstudio/DATASCI-W203/lab2/ahs2021raw_sc.csv", row.names=TRUE)
+options(digits=2)
+```
+```{r load data, echo = FALSE, results=FALSE}
+# Define common plotting functions
+make_scatter_plot <- function(data, x, y, cfactor, add_lm, legend) {
+  if (cfactor != '') {
+    g <- ggplot(data, aes(x = get(paste0(x)), y = get(paste0(y)))) + xlab(as.character(x)) + ylab(as.character(y)) + geom_point() + geom_point(aes(color = factor(get(paste0(cfactor))))) + guides(col = guide_legend(as.character(cfactor)))
+    if (add_lm == TRUE) {
+      g <- g + geom_smooth(method='lm', formula=y~x)
+    }
+  } else {
+    g <- ggplot(data, aes(x = get(paste0(x)), y = get(paste0(y)))) + xlab(as.character(x)) + ylab(as.character(y)) + geom_point()
+    if (add_lm == TRUE) {
+      g <- g + geom_smooth(method='lm', formula=y~x)
+    }
+  }
+  if (legend == FALSE) {
+    g <- g + theme(legend.position = "none")
+  }
+  return (g)
+}
+
+make_density_plot <- function(data, x, binsize, xmin, xmax) {
+  g <- ggplot(data, aes(x=get(paste0(x)))) + xlab(as.character(x)) + geom_histogram(aes(y=..density..), binwidth=binsize, colour="black", fill="white") + geom_density(alpha=.2, fill="#B20C34") + xlim(xmin, xmax) 
+  return (g)
+}
+
+# Train/Test sets building functions
+create_train_test_sets <- function(seed, data, ratio) {
+  set.seed(seed)
+  data_sample <- sample(c(TRUE,FALSE), nrow(data), replace=TRUE, prob=c(ratio, 1-ratio))
+  #result <- c(train = data[data_sample, ], test = data[!data_sample, ])
+  return (data_sample)
+}
+
+# Consolidated data scrubbing function
+data_scrub <- function(hdata) {
+  library(data.table)
+  # Filter only observations with HOAAMT paid by owner (i.e. HOAAMT > 0)
+  # only attached/detached buildings, removed mobile/RV/Manufactured homes (BLD == '01' or '10')
+  # NHQSCHOOL and RATINGNH have meaningful values.
+  # consider only apartment, attached/detached single house with HOA payment.
+  fdata <- hdata %>% filter(HOAAMT > 0 & BLD != "'10'" & BLD != "'01'")
+  # consider only reported square footage
+  fdata <- fdata %>% filter(UNITSIZE != "'-9'")
+  # consider only full baths
+  fdata <- fdata %>% filter(BATHROOMS %in% c("'01'", "'02'", "'03'", "'04'", "'05'", "'06'"))
+
+  # transform some variables
+  fdata <- fdata %>% mutate(p_yearbuilt_n = if_else(YRBUILT < 1920, 1920, if_else((YRBUILT > 2010 & YRBUILT < 2020) | YRBUILT > 2020, 2020, YRBUILT)))
+  fdata$p_yearbuilt <- factor(fdata$p_yearbuilt_n)
+  # House type (BLD) 02 = Single-Family Detached, 03 = Single-Family Attached, 01 = Apartments (Multi-unit)
+  fdata <- fdata %>% mutate(p_housetype = if_else(BLD == "'02'", 2, if_else(BLD == "'03'", 3, 1)))
+  fdata$p_housetype <- factor(fdata$p_housetype)
+  # Remove bad data 
+  fdata <- fdata %>% filter(RATINGNH > 0 & RATINGHS > 0)
+  bathroom_key <- c("'01'" = 1,"'02'" = 1.5, "'03'" = 2, "'04'" = 2.5, "'05'" = 3, "'06'" = 3.5)
+  fdata <- fdata %>% mutate(p_bathrooms = recode_factor(BATHROOMS, !!!bathroom_key))
+  # arrange Good school and a lot of serious crime boolean as follows:
+  # Good environment has a higher value.
+  # 2 - Good school or not a lot of crime (better environment), 1 - Not good school or a lot of crime (bad environment)
+  school_key <- c("'1'" = 2,"'2'" = 1, "'-6'" = -1, "'-9'" = -1)
+  fdata <- fdata %>% mutate(p_nhqschool = recode_factor(NHQSCHOOL, !!!school_key)) 
+  # Near petty crime? 1 = Agree, 2 = Disagree
+  crime_key <- c("'1'" = 1,"'2'" = 2, "'-9'" = NA)
+  fdata <- fdata %>% mutate(p_nhqcrime = recode_factor(NHQPCRIME, !!!crime_key))
+  # Near serious crime? 1 = Agree, 2 = Disagree
+  crime_key_s <- c("'1'" = 1,"'2'" = 2, "'-9'" = NA)
+  fdata <- fdata %>% mutate(p_nhqcrime_s = recode_factor(NHQSCRIME, !!!crime_key_s))
+  # Near disaster area? 1 = Agree, 2 = Disagree
+  diaster_key <- c("'1'" = 1,"'2'" = 2, "'-6'" = NA, "'-9'" = NA)
+  fdata <- fdata %>% mutate(p_diaster = recode_factor(NHQRISK, !!!diaster_key))
+  #1 = Has Garage or Carport
+  garage_key <- c("'1'" = 2,"'2'" = 1, "'-9'" = NA)
+  fdata <- fdata %>% mutate(p_garage = recode_factor(GARAGE, !!!garage_key))
+    
+  # rename some columns
+  setnames(fdata, old=c('TOTROOMS', 'BEDROOMS', 'RATINGNH', 'RATINGHS'), new=c('p_totrooms_n', 'p_bedrooms_n', 'p_ratingnh_n', 'p_ratinghs_n'))
+  
+  fdata$p_totrooms <- factor(fdata$p_totrooms_n)
+  fdata$p_bedrooms <- factor(fdata$p_bedrooms_n)
+  fdata$p_ratingnh <- factor(fdata$p_ratingnh_n)
+  fdata$p_ratinghs <- factor(fdata$p_ratinghs_n)
+
+  
+  # convert unitsize to average square footage from ranges.
+  sqft_labels <- c((499+250)/2, (500+749)/2, (750+999)/2, (1000+1499)/2, (1500+1999)/2, (2000+2499)/2, (2500+2999)/2, (3000+3999)/2, (4000+4999)/2)
+  fdata <- fdata %>% mutate(p_avg_sqft = as.numeric(as.character(factor(UNITSIZE, labels=sqft_labels))))
+  fdata <- fdata %>% mutate(p_sqft = as.numeric(gsub("'","",fdata$UNITSIZE)))
+  fdata$p_sqft <- factor(fdata$p_sqft)
+  
+  
+  # convert lotsize to sq ft - 1 acre = 43560 sq ft.
+  lot_labels <- c(-1, (1/8+1/16)/2, (1/8+1/4)/2, (1/4+1/2)/2, (1/2+1)/2, (1+5)/2, (5+10)/2, (10+20)/2)  
+  fdata <- fdata %>% mutate(p_avg_lotsize = 43560 * as.numeric(as.character(factor(LOTSIZE, labels=lot_labels))))
+  fdata <- fdata %>% mutate(p_lotsize = as.numeric(gsub("'","",fdata$LOTSIZE)))
+  fdata$p_lotsize <- factor(fdata$p_lotsize)
+
+  # select the interested columns for model
+  fdata <- fdata %>% mutate(p_metro_code = as.factor(OMB13CBSA))
+  fdata <- fdata %>% select(MARKETVAL, HOAAMT, LOTSIZE, p_housetype, p_yearbuilt, p_yearbuilt_n, p_avg_sqft, p_sqft, p_totrooms, p_totrooms_n, p_bedrooms, p_bedrooms_n, p_bathrooms, p_avg_lotsize, p_lotsize, p_metro_code, p_ratingnh, p_ratingnh_n, p_ratinghs, p_ratinghs_n, p_nhqschool, p_nhqcrime, p_nhqcrime_s, p_diaster, p_garage, WEIGHT)
+  return (fdata)
+}
+```
+## Introduction
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+# centralized data scrubbing code
+ahs_m_scrubbed <- data_scrub(ahs)
+ahs_m <- drop_na(ahs_m_scrubbed)
+```
+Real estate prices have seen a recent surge in pricing in an increasingly competitive market. While there is transparency around overall market value, many homeowners are concerned about the factors that will have a direct effect on the value of their homes. These factors are pivotal in the home buying process and ultimately create long term value for homeowners. Many communities have homeowners associations (HOAs) which present increasing annual costs for homeowners due to inflation. While the homeowners associations are essential in managing common property and providing services to residents, one of their principal functions is to protect property values. Our research focus is how the price of HOAs affect overall property value. 
+
+<!-- In a 2021 survey\footnote{US Census American Housing Survey,  https://www.census.gov/programs-surveys/ahs/data/2021/ahs-2021-public-use-file--puf-/ahs-2021-national-public-use-file--puf-.html, 2021} performed by the US Census American Housing Survey, homeowners reported paying an average of **`r scales::dollar(median(ahs_m$HOAAMT))`** for monthly HOA costs and a range between **`r scales::dollar(min(ahs_m$HOAAMT))`** dollars and **`r scales::dollar(max(ahs_m$HOAAMT))`**. -->
+Government officials who derive property taxes based on a home's assessed value, HOA community leaders and the homeowners have equal interest in an empirical analysis in the effect of HOA prices and home value. Homeowners in the community, most likely a subgroup such as the HOA Committee or Board of Directors can define the rate of increase of HOA fees and potential affect home prices. HOA takes care of all common areas, using dues collected from residents to repair, maintain, or replace community amenities and it does affect property value over time.\footnote{Cedar Management Group, "How Does An HOA Increase Property Values?",  https://www.cedarmanagementgroup.com/hoa-increase-property-values/, 2022} This research creates and evaluates a set of regression models then uses the selected model to estimate home value from HOA paid for a property.
+
+## Data and Methodology
+```{r create train and test sets, echo = FALSE}
+
+
+random_seed = 1234
+ahs_m_model <- ahs_m %>% select(MARKETVAL, HOAAMT, p_housetype, p_yearbuilt, p_yearbuilt_n, p_avg_sqft, p_totrooms_n, p_bedrooms_n, p_avg_lotsize, p_ratingnh_n, p_ratinghs_n, p_lotsize, p_bedrooms, p_nhqschool, p_nhqcrime, p_nhqcrime_s, p_diaster, p_ratingnh, p_metro_code, p_sqft, p_garage, WEIGHT)
+bool_select <- create_train_test_sets(random_seed, ahs_m_model, 0.3)
+trainset <- ahs_m_model[bool_select, ]
+testset <- ahs_m_model[!bool_select, ]
+
+ahs_m <- testset
+```
+The data in this study comes from the US Census 2021 American Housing Survey (AHS), a survey of U.S. households. We apply the survey weights to our regression models so that the data represents a nationally-representative sample. The observations are at the household-level, including the market value of the home, monthly HOA amount, housing characteristics, neighborhood information, and household socioeconomics. While the full sample includes **`r formatC(nrow(ahs), big.mark=",")`** observations, our analytic sample is homeowners (rather than renters) who pay HOA fees and who have a housing unit that is a single-family detached structure, a single-family attached structure, or is part of an apartment building. This excludes mobile homes, trailers, boats, RVs/vans. Based on these filters, our initial analytic sample has **`r formatC(nrow(ahs_m_scrubbed), big.mark=",")`** observations. We also consider a variety of other variables to include as controls in the regression models, all of which have a small amount of missing values. Once we remove observations that are missing values on the controls, our analytic sample is **`r formatC(nrow(ahs_m_model), big.mark=",")`**.
+
+We split the analytic sample into two pieces. We performed all exploration and model building on a 30% subsample of the data. The remaining 70%, totaling **`r nrow(testset)`** rows, was used to generate the regression results in this report.
+
+Our outcome variable is the owner's report of the market value of the home in dollars and our key independent variable is the monthly HOA fee in dollars. Both are ratio, metric variables that match our desired concepts well. However, they are self-reported, which introduces some error into the data, as further described in the limitations section. Histograms show that both market value and HOA fees are skewed distributions (skewness of **`r skewness(ahs_m$MARKETVAL)`** and **`r skewness(ahs_m$HOAAMT)`**, respectively), best modeled with log transformations. The histograms are in the appendix.
+
+<!-- The data in this study comes from the US Census American Housing Survey (AHS). Each row in the data represents a survey response within a household which includes market value ( *MARKETVAL* ) of the home, monthly HOA amount ( *HOAAMT* ), data related to neighborhood, income and other variables. We performed all exploration and model building on a 30% sub-sample of the data. The remaining 70%, totaling **`r nrow(testset)`** homeowner observations was used to generate the statistics in this report.  -->
+
+<!-- The cost of HOA varies from different type of housing: townhouse, single or multiple units of apartment, single family homes. From the data set, the attribute *BLD* represents only the unit number. We consider to convert the data into three main categories into a derived variable *p_housetype*: -->
+
+<!-- -   Apartment (**`r nrow(ahs_m %>% filter(p_housetype == 1))`** observations) -->
+
+<!-- -   Single detached family home (**`r nrow(ahs_m %>% filter(p_housetype == 2))`** observations) -->
+
+<!-- -   Single attached family home (**`r nrow(ahs_m %>% filter(p_housetype == 3))`** observations). -->
+
+<!-- We generated a scatter plot to observe the relationships between outcome and the independent variable. First we plot *MARKETVAL* (as Y outcome) and *HOAAMT* (as X independent variable) with *p_housetype* as a color factor. We would like to know the HOA differences from different house types: Apartment, detached/attached single family homes. From the first glance, we found some outliers in the data that indicates the exceptionally low HOA on a high value property. Besides, the plot below does not give much insight about linearity between the outcome and the independent variable. -->
+
+<!-- Scatter plot of relations between *MARKETVAL* versus *HOAAMT* for different House Types (p_housetype): -->
+
+<!-- 1.  Apartment -->
+
+<!-- 2.  Single detached family home -->
+
+<!-- 3.  Single attached family home -->
+We believe that the HOA fee may impact market value differently, depending on the type of housing structure you live in. For example, the HOA fee for an apartment building may pay for costly shared building expenses like a new roof and/or a regular maintenance and cleaning service for common spaces. On the other hand an HOA fee for a single-family detached housing complex may have substantially less burden, perhaps only funding some common fencing around the exterior of the neighborhood or lighting at the entrance of the neighborhood. A single-family attached complex, such as a duplex may be somewhere in the middle. As such, all our regression models estimate the interaction between HOA and housing type (apartment, single-family attached home, single-family detached home). We generated a scatter plot to observe the relationship between HOA Amount and Market Value. The colors represent the three different house types. It is difficult to discern a clear relationship, however apartments have more of a linear relationship with market value than the other house types.
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+g <- make_scatter_plot(ahs_m, 'HOAAMT', 'MARKETVAL', 'p_housetype', FALSE, TRUE)
+g <- g + xlab("HOA Amount") + ylab("Market Value") + guides(col = guide_legend("House Type"))
+g
+
+```
+In addition to housing type and HOA fees, we believe several other key factors predict the current market value of the home. It is important to include any covariates that are correlated with both HOA fees and the outcome variable to minimize omitted variable bias. As such, we included following candidate covariates in our analysis: (1) basic home characteristics, including year built, square footage, the presence of a garage, and lot size. We also use the owner's rating of the unit, which should account for hard-to-measure factors for which we do not have data. (2) neighborhood features, including the owner's rating of the neighborhood, if there is petty crime, serious crime, quality of the schools, flood zone risk and (3) supply and demand forces in a local geographic area. We expect geographic clustering, for example higher prices of homes in urban centers with high demand. Notably, we ultimately left several of these variables off our regression models due to high multicollinearity as follows: total number of rooms, number of bedrooms, number of bathrooms, owner's rating of the unit.
+
+We built four regression models. First, we used a base model that measures the predictive power of HOA fees (interacted with home type) on the market value of the home. Then we estimated models that incorporated the following groups of variables in turn: basic home characteristics, neighborhood features, and geography, as described above. There is more detail on the definition of these covariates in our appendix. We constructed all covariates as categorical variables/dummies, so that we did not impose a linear relationship with the market value.
+<!-- By reviewing the distribution of *p_housetype* below, the data shows most common house type is single detached family home, followed by single attached family home. Apartment has the least amount in the data set. -->
+
+<!-- Density plots for both *MARKETVAL* and *HOAAMT* variables for different *p_housetype* -->
+
+<!-- ```{r distribution review, message=FALSE, warning=FALSE, echo = FALSE} -->
+
+<!-- grid.arrange(ggplot(ahs_m, aes(x=MARKETVAL)) + geom_histogram(aes(fill=p_housetype, bins=1), position="identity", alpha=0.5) + scale_fill_manual(values = c("red", "blue", "green")) + scale_x_continuous(limits = c(0,3000000)) + theme(legend.position = "none"), ggplot(ahs_m, aes(x=HOAAMT)) + geom_histogram(aes(fill=p_housetype, bins=1), position="identity", alpha=0.5) + scale_fill_manual(labels=c("Apartment", "Single Detached", "Single Attached"), values = c("red", "blue", "green")) + scale_x_continuous(limits = c(0,2500)), ncol=2) -->
+
+<!-- ``` -->
+
+<!-- #### Variables -->
+
+<!-- According to the [AHS cookbook](https://www2.census.gov/programs-surveys/ahs/2021/2021%20AHS%20Table%20Specifications%20and%20PUF%20Estimates%20for%20User%20Verification.xlsx), the outcome ( *MARKETVAL* ) represents the home value (market value) and the independent variable ( *HOAAMT* ) represents the HOA paid by homeowner. We then incorporate the following variables that may effect the market value of a home: -->
+
+<!-- Original data variables: -->
+
+<!-- -   *YRBUILT* - year build of a house, metrics value. -->
+
+<!-- -   *BLD* - Building type. We only consider multi-unit apartment, single attached or detached family homes. -->
+
+<!-- -   *RATINGNH* - neighborhood rating, ordinal from 1-10, 1 means worst and 10 means best. -->
+
+<!-- -   *UNITSIZE* - square footage of the house, ordinal with square footage ranges. We convert them to actual square footage using the average of a range. For example, *UNITSIZE* (2) refers to square footage between 500 to 749 square ft, we use the average of square ft. to present the value (**`r (500+749)/2`**) and (9) refers to over 4000 square ft. Then we take the average of 4000 to 4999 square ft. to present the value (**`r (4000+4999)/2`**). New derived variable ( *p_avg_sqft* )is added to the dataset. -->
+
+<!-- -   *TOTROOMS* - total number of rooms in the house, metrics value. -->
+
+<!-- -   *LOTSIZE* - house lot size category values in acre ranges. -->
+
+<!-- -   *RATINGHS* - house status rating, ordinal from 1-10, 1 means worst and 10 means best. -->
+
+<!-- -   *BATHROOMS* - number of bathrooms, categorical values. We only consider values from 1-6 to indicate number of bathrooms. -->
+
+<!-- -   *OMB13CBSA* - Metro city location code. -->
+
+<!-- -   *NHQSCHOOL* - Near good school, boolean value -->
+
+<!-- -   *GARAGE* - House has parking space, boolean value -->
+
+<!-- -   *NHQPCRIME* - Near a lot of petty crime, boolean value -->
+
+<!-- -   *NHQSCRIME* - Near a lot of serious crime, boolean value -->
+
+<!-- -   *NHQRISK* - Near diaster zone, boolean value -->
+
+<!-- -   *WEIGHT* - According to the survey [documents](https://www.census.gov/content/dam/Census/programs-surveys/ahs/tech-documentation/2015/Getting%20Started%20with%20the%20AHS%20PUF%202015%20and%20Beyond.pdf), we apply additional weight to the linear regression module. The *WEIGHT* parameter associated with the above chosen variables. -->
+
+<!-- Derived variables: -->
+
+<!-- -   *p_housetype* - transformed factor variable from *BLD*, 1 - apartment, 2 - single detached homes, 3 - single attached homes. -->
+
+<!-- -   *p_yearbuilt* - transformed factor variable from *YRBUILT*. Consolidate years in decades instead of individual years. e.g. 1919 -\> 1920, 2011 -\> 2020 -->
+
+<!-- -   *p_avg_sqft* - Average square footage from *UNITSIZE* (metrics) Please see above for the calculation. -->
+
+<!-- -   *p_sqft* - tranformed factor variable from *p_avg_soft*. -->
+
+<!-- -   *p_avg_lotsize* - Average lot size in square foot from *LOTSIZE* ordinal ranges similar to *UNITSIZE* - average of the range. For example: value 2 of LOTSIZE refers to (1/8+1/4)/2 \* 43560 = 8167.5 sq ft. -->
+
+<!-- -   *p_lotsize* - transformed factor variable from *p_avg_lotsize* -->
+
+<!-- -   *p_bedrooms* - transformed factor variable from *BEDROOMS*. -->
+
+<!-- -   *p_bathrooms* - transformed factor variable from *BATHROOMS* categorical variable values from 1 to 6. '01' = 1 bathroom, '02' = 1.5, '03' = 2, '04' = 2.5, '05' = 3, '06' = 3.5 -->
+
+<!-- -   *p_totrooms* - transformed factor variable from *TOTROOMS*. -->
+
+<!-- -   *p_garage* - transformed factor variable from *GARAGE*. -->
+
+<!-- -   *p_nhqcrime* - transformed factor variable from *NHQPCRIME*. -->
+
+<!-- -   *p_nhqcrime_s* - transformed factor variable from *NHQSCRIME*. -->
+
+<!-- -   *p_nhqschool* - transformed factor variable from *NHQSCHOOL*. -->
+
+<!-- -   *p_ratinghs* - transformed factor variable from *RATINGHS*. -->
+
+<!-- -   *p_ratingnh* - transformed factor variable from *RATINGNH*. -->
+
+<!-- -   *p_diaster* - transformed factor variable from *NHQRISK*. -->
+
+<!-- -   *p_metro_code* - transformed factor variable from *OMB13CBSA*. -->
+
+<!-- #### Overall distributions -->
+
+<!-- We evaluated the distribution of the HOA amount and the market value for any variance. From the density plots below, *MARKETVAL* represents a pretty normal distribution where *HOAAMT* seems to be skewed to the right. We observe that majority of HOA amount is around \$100-\$200. In rare cases, HOA may be over \$500. -->
+```{r echo = FALSE, message=FALSE,  warning=FALSE}
+ahs_m <- ahs_m %>% mutate(l_MARKETVAL = log(MARKETVAL))
+ahs_m <- ahs_m %>% mutate(l_HOAAMT = log(HOAAMT))
+#grid.arrange(make_density_plot(ahs_m, 'l_MARKETVAL', 0.5, 0, 20), make_density_plot(ahs_m, 'l_HOAAMT', 1, 0, 10), ncol=2)
+```
+<!-- ### Train and Test Sets -->
+
+<!-- ```{r create train and test sets, echo = FALSE} -->
+
+<!-- random_seed = 1234 -->
+
+<!-- ahs_m_model <- ahs_m %>% select(l_MARKETVAL, l_HOAAMT, p_housetype, p_yearbuilt, p_yearbuilt_n, p_avg_sqft, p_totrooms_n, p_bedrooms_n, p_avg_lotsize, p_ratingnh_n, p_ratinghs_n, p_lotsize, p_bedrooms, p_nhqschool, p_nhqcrime, p_diaster, p_ratingnh, p_metro_code, p_sqft, p_garage, WEIGHT) -->
+
+<!-- bool_select <- create_train_test_sets(random_seed, ahs_m_model, 0.3) -->
+
+<!-- trainset <- ahs_m_model[bool_select, ] -->
+
+<!-- testset <- ahs_m_model[!bool_select, ] -->
+
+<!-- ``` -->
+
+<!-- The research creates a linear regression model and then use the model to fit the unseen (test) data. Therefore, the dataset is split based on 30/70 rule - trained set (**`r nrow(trainset)`** observations) and remaining is reserved as test set (**`r nrow(testset)`** observations). That is, the trained set is used to create the linear regression model and the test set is used to validate the model. -->
+
+<!-- #### Correlation observations -->
+
+<!-- First we would like to remove any collinearity between the outcome ( *l_MARKETVAL*) with other variables using correlation tests. Besides, we would also like to remove any independent variables that are highly correlated (one can derived others) to each other. We used Spearman to validate the correlations between the numeric variables. -->
+
+<!-- The following shows the correlation graphs of the variables. The left shows the correlation test for all numeric variables and the right shows the selected numeric variables for linear regression. -->
+
+<!-- ```{r correlation plots, echo = FALSE, results=FALSE} -->
+
+<!-- ahs_vars <- ahs_m %>% select(l_MARKETVAL, l_HOAAMT, p_yearbuilt_n, p_avg_sqft, p_totrooms_n, p_bedrooms_n, p_avg_lotsize, p_ratingnh_n, p_ratinghs_n) %>% drop_na(p_avg_lotsize) -->
+
+<!-- par(mfrow=c(1,2)) -->
+
+<!-- corrplot(cor(ahs_vars), method="pie") -->
+
+<!-- ahs_cors <- ahs_m %>% select(l_MARKETVAL, l_HOAAMT, p_yearbuilt_n, p_avg_sqft, p_avg_lotsize, p_ratingnh_n) %>% drop_na(p_avg_lotsize) -->
+
+<!-- corrplot(cor(ahs_cors), method="pie") -->
+
+<!-- ``` -->
+
+<!-- As shown from the correlation plot on the left below, *p_avg_sqft* (average square footage) is highly correlated to *p_totalrooms_n*, *p_bedrooms_n*. *p_ratinghs_n* (House rating) is also highly related to *p_ratingnh_n* (Neighborhood rating). We will remove some of these correlated variables in the linear regression. Besides, we want to pick the highest correlated variables with the outcome and eliminate highly correlated variables. For example, we are going to keep variables like *p_avg_sqft* (average square footage) that have the highest correlation factor with *l_MARKETVAL* and dropped the variables *p_bedrooms_n* and *p_totalrooms_n*. The final selection of numeric independent variables are: *l_HOAAMT*, *p_yearbuilt*, *p_avg_lotsize*, *p_ratingnh_n*, and *p_avg_sqft* and plotted the correlation plots for the final variables (on the right below) to consider linear regressions. -->
+## Results
+<!-- ### Regression Model Building -->
+
+<!-- We start with the baseline linear regression model with *l_MARKETVAL* \~ *l_HOAAMT* \* *p_housetype* first, where $\beta_1$ represents the increase in market value per the monthly HOA amount. We also incorporate *p_housetype* as the condition effect on *l_HOAAMT* because the amount of HOA is affected by the type of housing. Higher HOA is more likely for service apartment or single housing with clubhouse amenities. -->
+
+<!-- $$ -->
+
+<!--   \begin{aligned} -->
+
+<!--   & \underline{\textbf{Baseline Model}}: \\ -->
+
+<!--   & [Model_1]: \widehat{log(market value)}=\beta_0 + \beta_1\cdot log(HOA\ amount)\cdot HouseType -->
+
+<!--   \end{aligned} -->
+
+<!-- $$ -->
+
+<!-- Next, we apply additional house characteristics like lotsize, year built data into the a different model. -->
+
+<!-- $$ -->
+
+<!--   \begin{aligned} -->
+
+<!--   & \underline{\textbf{House Characteristics Model}}\\ -->
+
+<!--   & [Model_2]: \widehat{log(market value)}=\beta_0 + \beta_1\cdot log(HOA\ amount)\cdot HouseType\\ -->
+
+<!--   & + \beta_2\cdot Year\ Built + \beta_3\cdot Lot\ Size + \beta_4\cdot Unit\ Size\\ -->
+
+<!--   & + \beta_5\cdot Parking -->
+
+<!--   \end{aligned} -->
+
+<!-- $$ -->
+
+<!-- Third model, we add neighborhood characteristics to the linear regression model. -->
+
+<!-- $$ -->
+
+<!--   \begin{aligned}   -->
+
+<!--   & \underline{\textbf{Neighborhood Characteristics Model}}\\ -->
+
+<!--   & [Model_3]: \widehat{log(market value)}=\beta_0 + \beta_1\cdot log(HOA\ amount)\cdot HouseType \\ -->
+
+<!--   & + \beta_2\cdot Year\ Built + \beta_3\cdot Lot\ Size + \beta_4\cdot Unit\ Size\\ -->
+
+<!--   & + \beta_5\cdot Parking + \beta_6\cdot Good\ School\\ -->
+
+<!--   & + \beta_7\cdot Neighborhood\ Rating + \beta_8\cdot Crime\ Condition\\ -->
+
+<!--   & + \beta_9\cdot Diaster\ Zone -->
+
+<!--   \end{aligned} -->
+
+<!-- $$ -->
+
+<!-- For the last model, we apply geographic location information into the model.  -->
+
+<!-- $$ -->
+
+<!--   \begin{aligned} -->
+
+<!--   & \underline{\textbf{Geographic Location Model}}\\ -->
+
+<!--   & [Model_4]: \widehat{log(market value)}=\beta_0 + \beta_1\cdot log(HOA\ amount)\cdot HouseType\\ -->
+
+<!--   & + \beta_2\cdot Year\ Built + \beta_3\cdot Lot\ Size + \beta_4\cdot Unit\ Size\\ -->
+
+<!--   & + \beta_5\cdot Parking + \beta_6\cdot Good\ School\\ -->
+
+<!--   & + \beta_7\cdot Neighborhood\ Rating + \beta_8\cdot Crime\ Condition\\ -->
+
+<!--   & + \beta_9\cdot Diaster\ Zone + \beta_9\cdot Geographic\ Location -->
+
+<!--   \end{aligned} -->
+
+<!-- $$ -->
+```{r build models, results=FALSE, echo = FALSE}
+# Just HOA
+model_1 <- lm(l_MARKETVAL~l_HOAAMT*p_housetype, data = ahs_m, na.action=na.exclude, weights=WEIGHT)
+summary(model_1)
+# House Size Basics
+model_2 <- lm(l_MARKETVAL~l_HOAAMT*p_housetype
+             + p_yearbuilt 
+             + p_lotsize
+             + p_sqft
+             + p_garage
+             , data = ahs_m, na.action=na.exclude, weights=WEIGHT)
+summary(model_2)
+
+# Add in neighborhood characteristics
+model_3 <- lm(l_MARKETVAL~l_HOAAMT*p_housetype 
+             + p_yearbuilt 
+             + p_lotsize
+             + p_sqft
+             + p_garage
+             + p_nhqschool
+             + p_nhqcrime
+             + p_nhqcrime_s
+             + p_diaster
+             + p_ratingnh, data = ahs_m, na.action=na.exclude, weights=WEIGHT)
+summary(model_3)
+
+# Add in geography
+model_4<- lm(l_MARKETVAL~l_HOAAMT*p_housetype 
+             + p_yearbuilt 
+             + p_lotsize
+             + p_sqft
+             + p_garage
+             + p_nhqschool
+             + p_nhqcrime
+             + p_nhqcrime_s
+             + p_diaster
+             + p_ratingnh
+             + p_metro_code, data = ahs_m, na.action=na.exclude, weights=WEIGHT)
+summary(model_4)
+```
+<!-- ### Regression Model Comparison -->
+```{r message=FALSE, warning=FALSE, results=FALSE, echo = FALSE}
+
+anova(model_1, model_2, model_3, model_4)
+
+#mod <- trainset %>% mutate(mod_pred1 = predict(model_1), mod_resid1=resid(model_1))
+
+#g1 <- ggplot(aes(x=mod_pred1, y=mod_resid1), data=mod) + geom_point() + stat_smooth()
+
+#mod <- trainset %>% mutate(mod_pred2 = predict(model_2), mod_resid2=resid(model_2))
+
+#g2 <- ggplot(aes(x=mod_pred2, y=mod_resid2), data=mod) + geom_point() + stat_smooth()
+
+#mod <- trainset %>% mutate(mod_pred3 = predict(model_3), mod_resid3=resid(model_3))
+
+#g3 <- ggplot(aes(x=mod_pred3, y=mod_resid3), data=mod) + geom_point() + stat_smooth()
+
+#mod <- trainset %>% mutate(mod_pred4 = predict(model_4), mod_resid4=resid(model_4))
+
+#g4 <- ggplot(aes(x=mod_pred4, y=mod_resid4), data=mod) + geom_point() + stat_smooth()
+
+#grid.arrange(g1, g2, g3, g4, ncol=2)
+
+```
+<!-- ### Regression Model Accuracy Evaluation -->
+```{r echo = FALSE, warning=FALSE, message = FALSE}
+# first drop the column l_MARKETVAL from testset
+predictset <- subset(ahs_m, select = -c(l_MARKETVAL))
+testset <- ahs_m %>% mutate(p_MARKETVAL = predict(model_4, predictset))
+testset <- testset %>% mutate(SquareError = (l_MARKETVAL - p_MARKETVAL)^2)
+```
+<!-- Now the final model to predict the test data and then compare the predicted *l_MARKETVAL* and restore the result in *p_MARKETVAL*. Then we plot the differences between actual *l_MARKETVAL* and predict *p_MARKETVAL* as the residual for the linear regression model. We found the model is pretty accurate with MSE (mean square error) as **`r sum(testset$SquareError)/nrow(testset)`** -->
+<!-- ```{r message = FALSE, warning=FALSE, echo = FALSE} -->
+<!-- grid.arrange(ggplot(aes(x=1:nrow(testset), y=l_MARKETVAL - p_MARKETVAL), data=testset) + geom_point(aes(color = p_housetype)) + stat_smooth() + xlab("Test observations") + theme(legend.position = "none"), ggplot(aes(x=1:nrow(testset), y=SquareError), data=testset) + geom_point(aes(color = p_housetype)) + stat_smooth() + xlab("Test observations") + ylim(0,8), ncol=2, widths=c(3,5)) -->
+<!-- ``` -->
+```{r build test models for starggazer, results=FALSE, echo = FALSE}
+# stargazer tables
+
+# # use test, or confirm data set 
+# # Just HOA
+# model_1_test <- lm(l_MARKETVAL~l_HOAAMT*p_housetype, data = testset, na.action=na.exclude, weights=WEIGHT)
+# summary(model_1_test)
+# 
+# # House Size Basics
+# model_2_test <- lm(l_MARKETVAL~l_HOAAMT*p_housetype
+#              + p_yearbuilt 
+#              + p_lotsize
+#              + p_sqft
+#              + p_garage
+#              , data = trainset, na.action=na.exclude, weights=WEIGHT)
+# summary(model_2_test)
+# 
+# # Add in neighborhood characteristics
+# model_3_test <- lm(l_MARKETVAL~l_HOAAMT*p_housetype 
+#              + p_yearbuilt 
+#              + p_lotsize
+#              + p_sqft
+#              + p_garage
+#              + p_nhqschool
+#              + p_nhqcrime
+#              + p_diaster
+#              + p_ratingnh, data = testset, na.action=na.exclude, weights=WEIGHT)
+# summary(model_3_test)
+# 
+# # Add in geography
+# model_4_test <- lm(l_MARKETVAL~l_HOAAMT*p_housetype 
+#              + p_yearbuilt 
+#              + p_lotsize
+#              + p_sqft
+#              + p_garage
+#              + p_nhqschool
+#              + p_nhqcrime
+#              + p_diaster
+#              + p_ratingnh
+#              + p_metro_code, data = testset, na.action=na.exclude, weights=WEIGHT)
+# summary(model_4_test)
+
+se_hoa <- model_1 %>% 
+  vcovHC(type = "HC1") %>% 
+  diag() %>% 
+  sqrt()
+
+se_basics <- model_2 %>% 
+  vcovHC(type = "HC1") %>% 
+  diag() %>% 
+  sqrt()
+
+se_neighborhood <- model_3 %>% 
+  vcovHC(type = "HC1") %>% 
+  diag() %>% 
+  sqrt()
+
+se_geography <- model_4 %>% 
+  vcovHC(type = "HC1") %>% 
+  diag() %>% 
+  sqrt()
+```
+```{r display regression table, message=FALSE, echo=FALSE, results='asis'}
+
+             # + p_yearbuilt 
+             # + p_lotsize
+             # + p_sqft
+             # + p_garage
+             # + p_nhqschool
+             # + p_nhqcrime
+             # + p_diaster
+             # + p_ratingnh
+             # + p_metro_code, data = testset, na.action=na.exclude, weights=WEIGHT)
+
+stargazer(
+  model_1, model_2, model_3, model_4,
+  type = 'latex', 
+  se = list(se_hoa ,se_basics, se_neighborhood, se_geography),
+  omit = c("p_yearbuilt","p_ratingnh", "p_metro_code", "p_nhqschool", "p_sqft", "p_lotsize"),
+  header=FALSE,
+  title = "Estimated Regressions",
+  dep.var.caption  = "Output Variable: Market Value",
+  dep.var.labels   = "",
+  star.cutoffs = c(0.05, 0.01, 0.001),
+  covariate.labels = c("HOA Amount", "Single-Family (D)", "Single-Family (A)", "Garage - No", "Near petty crime - No", "Near serious crime - No", "Near a disaster area - No", "$HOA Amount\\cdot Single Family (D)$", "$HOA Amount\\cdot Single Family(A)$", "Constant"),
+  add.lines = list(
+    c("", "Lot Size", "\\checkmark", "\\checkmark","\\checkmark"),
+    c("", "Square Footage", "\\checkmark", "\\checkmark","\\checkmark"),
+    c("", "Year Built", "\\checkmark", "\\checkmark","\\checkmark"),
+    c("", "Neighborhood Rating", "", "\\checkmark", "\\checkmark"),
+    c("", "School Rating", "", "\\checkmark", "\\checkmark"),
+    c("", "Metro Code", "", "","\\checkmark"),
+    "\\hline"
+  ), 
+  omit.stat=c("adj.rsq","f"), 
+  
+  # recommendations from alex regarding fitting stargazer on a single page
+  #font.size = "footnotesize", 
+  column.sep.width = "1pt", 
+  #single.row = TRUE,
+  #no.space = TRUE,
+  
+  digits=2,
+  notes.append = FALSE,
+  notes = "\\parbox[t]{7cm}{$HC_1$  robust standard errors in parentheses. HOA Amount is logged. D = Detached, A = Attached.}"
+)
+```
+
+Table 1 shows the results of four models, with robust standard errors applied. Across all models, the *ln(HOA Amount)* remains positive and statistically significant. The point estimates are between 0.18 and 0.28, meaning that if we increase the HOA Amount by 1%, we expect the market value to increase by about 0.2%, all else held equal
+
+Importantly, the interaction effects of *ln(HOA Amount) \* (Detached single family homes)* and *ln(HOA Amount) \* (Attached single family homes)*, compared to apartment buildings, are also statistically significant and negative across all models. In fact, with point values between -0.15 and -0.10, the main effect of HOA Amounts is dampened or largely wiped out for single family homes.
+
+Practically speaking, if the average HOA Amount is about \$500 a month for an apartment owner who pays HOA fees and the average apartment market price is \$450,000 (as suggested by unweighted AHS data), this means that raising the monthly HOA by \$5 is expected to raise their market price by about \$9,000 (\$450,000 *\ 0.02).
+
+<!-- We also assessed how well our training dataset (on 30% of the sample) did compared to the final model (on 70% of the sample). The adjusted R\^2 on our training dataset was *XX*, which reduced to *XX* on the final models. -->
+
+## Limitations
+Our OLS regression model is consistent if we (1) assume observations are independent and identically distributed (iid) and (2) if the population distribution is described by a unique best linear predictor (BLP). Housing prices are certainly spatially dependent, violating the independence assumption. We expect that housing prices are clustered geographically, for example certain neighborhoods are more expensive than others. To attempt to address this problem, we apply a set of geographic fixed effects at the regional level, as well as variables to reflect neighborhood characteristics, such as neighborhood rating, school quality, and crime rate. t is likely that we do not fully account for neighborhood clustering with this approach. With regard to the BLP, we do not see any visual evidence of heavy-tailed distributions in any diagnostic plot after we used the log transformation on our metric variables (see Appendix). In addition, our regression models drop any perfectly collinear features. Appendix C also shows our analysis of Classic Linear Model Assumptions on our last model 4, which we show for completeness. While our model fails these tests, our dataset is large enough that we are not constrained by these assumptions.
+
+Since we are limited to the variables in our survey dataset, our estimate of the coefficient on HOA fees may also suffer from omitted variable bias. This bias exists when an omitted variable is correlated both with HOA fees and the house's market value. For example, homes with high HOA fees may also be homes with fancy amenities (e.g., nice gym, rooftop deck, tennis courts). These fancy amenities may raise the market value of the home, but we do not have a robust way to account for them in our survey data. I expect a positive correlation between fancy amenities and HOA fees and a positive correlation between fancy amenities and our outcome variable of market value. Therefore, I expect the main effect is being driven farther away from zero, making my hypothesis overconfident.
+
+In addition, some of the neighborhood variables in our datasets are quite coarse, so they cannot represent the diversity that exists in the country. For example, school quality and crime are binary yes/no questions, such as "Agree or disagree: this neighborhood has good schools." The impact on the model is that we likely have higher error, in other words, we are less predictive of the true population model than we would be with more granular survey questions.
+
+Next, our data is based on self-reports from survey respondents. Self-reports are subject to recall bias, social-desirability bias (e.g., either downplaying the value of the home and the HOA fee or embellishing it), and simply not knowing the true value (e.g., You have the wrong estimate in your head for the square footage of your home).
+
+Finally, while we included survey weights, we did not control for the complex sample design of the survey (requiring replicate weights) in these estimates. As a result, the estimates of the standard errors are likely biased.
+
+## Conclusion
+This study assessed the importance of HOA fees in predicting the market value of a home. Due to our study limitations, this is a correlational, rather than a causal study. We found that HOA fees are positively correlated with market value for apartments. There is less evidence of this relationship for single family homes. This is consistent with our theory that HOAs play a more important role in the operation of an apartment than for a single family home. As apartment owners view the next annual increase in HOA payments, they might view them more an investment in their own property value, rather than a penalty. Alternatively, single-family home owners should be more cautious when approving HOA fee increases. These fees seem less correlated with market value. A future study might look at how changes in HOA fees over time for the same home affect the market value of the home, rather than a correlational study of a single year of data.
+
+## Appendix A
+The following variables represent recodes from the raw survey data as follows: House Type (BLD variable recoded to exclude categories 1 and 10. 1 = apartment, 2 = detached single family home, 3 = attached single family home) Year Built: 2011 through 2021 recoded as 2020, Less than 1920 recoded as 1920. Lot Size: No recode. Not that this retains category -6 (Not Applicable) as a valid category. Dropping all -6 would drop all apartments, which we did not want. Garage: Not Reported or Not Applicable coded as NA High Petty Crime: Not Reported or Not Applicable coded as NA High Serious Crime: Not Reported or Not Applicable coded as NA Good Schools: Not Reported or Not Applicable coded as NA Diaster Zone: Not Reported or Not Applicable coded as NA Neighborhood Rating
+
+## Appendix B
+
+### Normality
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, results=FALSE}
+g <- make_density_plot(ahs_m, 'MARKETVAL', 50000, 0, 2000000)
+g <- g + xlab("Market Value") + ylab("Density")
+
+g1 <- make_density_plot(ahs_m, 'HOAAMT', 50, 0, 1000)
+g1 <- g1 + xlab("HOA Amount") + ylab("Density")
+```
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+grid.arrange(g, g1, ncol=2)
+```
+From the distribution graphs above for both *Market Value* and *HOA Amount*, we found they are skewed to the right. A skewness check confirms this with market value as **`r skewness(ahs_m$MARKETVAL)`** and HOA amount as **`r skewness(ahs_m$HOAAMT)`**, respectively. To adjust the normality of the data, we decided to apply logarithmic function on both *Market Value* and *HOA Amount*. New transformed variables *ln(Market Value)* and *ln(HOA Amount)* are created respectively.
+```{r echo = FALSE, message=FALSE, warning=FALSE, results=FALSE}
+ahs_m <- ahs_m %>% mutate(l_MARKETVAL = log(MARKETVAL))
+ahs_m <- ahs_m %>% mutate(l_HOAAMT = log(HOAAMT))
+
+g <- make_density_plot(ahs_m, 'l_MARKETVAL', 0.5, 0, 20)
+g <- g + xlab("ln(Market Value)") + ylab("Density")
+g1 <- make_density_plot(ahs_m, 'l_HOAAMT', 1, 0, 10)
+g1 <- g1 + xlab("ln(HOA Amount)") + ylab("Density")
+```
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+grid.arrange(g, g1, ncol=2)
+```
+As shown from the graph above, we found that the graphs shows a more normal distribution compared to the original ones after the transformation. Therefore, we proceed to use the logarithmic variables *ln(Market Value)* and *ln(HOA Amount)* in the linear regression model later.
+
+## Appendix C
+
+In addition to the big data OLS assumptions of iid and having a unique BLP, we also check three additional Classic Linear Model assumptions: linear conditional mean, homoskedastic errors, and that the errors are normally distributed. These additional assumptions are not necessary for us to have a consistent model, since we are in the big data world, but we provide the results for completeness. 
+
+First, we find some evidence that we do not have a *linear conditional mean* with the following three plots: (1) the model 4 residuals versus the predicted values, (2) the log(HOA Amount), our only metric predictor, against the outcome of log(market value) and (2) plotting the log(HOA Amount) against the model 4 residuals. The plots, particular the latter two, appear to have some slight non-linearity to them, but it is not a severe deviation.
+
+Second, we find evidence that the *errors are not homoskedastic*. We plot standardized residuals vs fitted value and conduct a Bruesh-Pagan test (null is that the data are homoskedastic). The plot hints at some heteroskedasticity with some fanning out and we also reject the null of the Bruesh-Pagan test that the errors are homoskedastic (p <2e-16).
+
+Lastly, we find evidence that the *errors are not normally distributed*, both with a Q-Q plot and a Shapiro-Wilk test (null is that the errors are normally distributed). The plot hints at non-normality and we reject the null of the Shapiro-Wilx test that the errors are homoskedastic (p <2e-16). 
+
+### Linear Conditional Expectation: 3 Plots
+
+```{r}
+# Assumption #1: Linear Conditional Expectation
+
+# Add Model Residuals and Model Predictions to dataframe
+ahs_m <- ahs_m %>%
+  mutate(model_4_residuals = resid(model_4),
+         model_4_predictions = predict(model_4)
+         )
+
+# Plot 0: Fitted Values Vs Residuals
+plot(model_4, which=1)
+
+# Plot 1: x vs y
+plot_1 <- ahs_m %>%
+  ggplot(aes(x = log(HOAAMT), y = log(MARKETVAL))) +
+  geom_point() + geom_smooth(method = 'lm')
+
+# Plot 2:  x vs model 4 residual plots
+# x = HOAAMT
+plot_2 <- ahs_m %>%
+  ggplot(aes(x = log(HOAAMT), y = model_4_residuals)) +
+  geom_point() + geom_smooth(method = 'lm')
+
+plot_1 | plot_2
+```
+
+### Heteroskedasticity Plot
+
+```{r}
+# Assumption 2: Homoskedasticity
+# Plot standardized residuals vs fitted value
+plot(model_4, which=3)
+```
+
+### Normally Distributed Errors Plot
+
+```{r}
+# Assumption 3: Normally Distributed Errors
+#print("Q-Q Normally Distributed Error Plot")
+# Normal Q-Q plot
+plot_4 <- plot(model_4, which=2)
+
+#plot_4
+
+
+
+```
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, results=FALSE}
+# Homoskedasticity Check
+# Bruesh-Pagan (H0: Data are homoskedastic)
+# Result = Reject null
+bptest(model_4)
+
+# Normally Distributed Errors Check
+# Shapiro-Wilk Test (H0: Residuals are normally distributed)
+# Result = Reject null
+shapiro.test(sample(model_4$residuals, size = 4500, replace = TRUE))
+```
