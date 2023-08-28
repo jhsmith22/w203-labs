@@ -20,6 +20,8 @@ We utilize data from the 2020 American National Election Studies (ANES), which s
 occurred on Nov 8, 2020 (Nov 8, 2020 - Jan 4, 2021). It was a survey of non-institutionalized U.S. citizens
 age 18 and older.
 
+Group Members: Jessica Stockham (me), Heaven Klair, Josie Ruggieri. In this group project, I did nearly all the coding and report writing. Other group members contributed visualizations and brainstorming.
+
 # Lab 2 Abstract
 Real estate prices have seen a recent surge in pricing in an increasingly competitive market. While there is
 transparency around overall market value, many homeowners are concerned about the factors that will have a
@@ -34,5 +36,8 @@ and the homeowners have equal interest in an empirical analysis in the effect of
 Homeowners in the community, most likely a subgroup such as the HOA Committee or Board of Directors
 can define the rate of increase of HOA fees and potential affect home prices. HOA takes care of all common
 areas, using dues collected from residents to repair, maintain, or replace community amenities and it does
-affect property value over time.1 This research creates and evaluates a set of regression models then uses
-the selected model to estimate home value from HOA paid for a property
+affect property value over time. This research creates and evaluates a set of regression models then uses
+the selected model to estimate home value from HOA paid for a property.
+
+Group Members: Jessica Stockham (me), Derrick Chan-Sew, Jammy Chan (Chi Hung). In this group project, I authored the final report, including a detailed discussions and limitations section. I also wrote code to clean/prepare predictive features and test the statistical assumptions in our model. Other group members wrote the code to extract the data, store necessary variables, perform exploratory data analysis, and run the linear regression models.
+
