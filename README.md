@@ -31,14 +31,14 @@ direct effect on the value of their homes. These factors are pivotal in the home
 create long term value for homeowners. Many communities have homeowners associations (HOAs) which
 present increasing annual costs for homeowners due to inflation. While the homeowners associations are
 essential in managing common property and providing services to residents, one of their principal functions
-is to protect property values. Our research focus is how the price of HOAs affect overall property value.
+is to protect property values. **Our research focus is how the price of HOAs affect overall property value.**
 
 Government officials who derive property taxes based on a home’s assessed value, HOA community leaders
 and the homeowners have equal interest in an empirical analysis in the effect of HOA prices and home value.
 Homeowners in the community, most likely a subgroup such as the HOA Committee or Board of Directors
 can define the rate of increase of HOA fees and potential affect home prices. HOA takes care of all common
 areas, using dues collected from residents to repair, maintain, or replace community amenities and it does
-affect property value over time. This research creates and evaluates a set of regression models then uses
-the selected model to estimate home value from HOA paid for a property.
+affect property value over time. **This research creates and evaluates a set of regression models then uses
+the selected model to estimate home value from HOA paid for a property.**
 
 
