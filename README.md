@@ -3,7 +3,7 @@ This repository contains 2 lab reports I contributed to as part of a master-leve
 
 **Lab 1 Group Members and My Contribution**: Jessica Stockham (me), Heaven Klair, Josie Ruggieri. In this group project, I did nearly all the coding and report writing. I wrote code to clean the data and conduct the statistical tests. Other group members contributed visualizations and brainstorming. 
 
-**Lab 2 Group Members and My Contribution**: Jessica Stockham (me), Derrick Chan-Sew, Jammy Chan (Chi Hung). In this group project, I authored the final report, including a detailed discussions and limitations section. I also wrote code to clean/prepare predictive features and test the statistical assumptions in our model. Other group members wrote the code to extract the data, store necessary variables, perform exploratory data analysis, and run the linear regression models. We also produced a slide presentation with our results.
+**Lab 2 Group Members and My Contribution**: Jessica Stockham (me), Derrick Chan-Sew, Jammy Chan (Chi Hung). In this group project, I authored most of the final report, including a detailed discussions and limitations section. I also wrote code to clean/prepare predictive features and test the statistical assumptions in our model. Other group members wrote the code to extract the data, store necessary variables, perform exploratory data analysis, and run the linear regression models. We also produced a slide presentation with our results.
 # Lab 1 Abstract
 Just like the COVID-19, the US 2020 elections raised unprecedented challenges for its citizens. While the
 nation was still recovering from the pandemic, the Americans, amongst the turmoil, stood up to cast their
@@ -31,14 +31,7 @@ direct effect on the value of their homes. These factors are pivotal in the home
 create long term value for homeowners. Many communities have homeowners associations (HOAs) which
 present increasing annual costs for homeowners due to inflation. While the homeowners associations are
 essential in managing common property and providing services to residents, one of their principal functions
-is to protect property values. **Our research focus is how the price of HOAs affect overall property value.**
-
-Government officials who derive property taxes based on a home’s assessed value, HOA community leaders
-and the homeowners have equal interest in an empirical analysis in the effect of HOA prices and home value.
-Homeowners in the community, most likely a subgroup such as the HOA Committee or Board of Directors
-can define the rate of increase of HOA fees and potential affect home prices. HOA takes care of all common
-areas, using dues collected from residents to repair, maintain, or replace community amenities and it does
-affect property value over time. **This research creates and evaluates a set of regression models then uses
+is to protect property values. **Our research focus is how the price of HOAs affect overall property value. This research creates and evaluates a set of regression models then uses
 the selected model to estimate home value from HOA paid for a property.**
 
 
