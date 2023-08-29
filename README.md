@@ -3,7 +3,7 @@ This repository contains 2 lab reports I contributed to as part of a master-leve
 
 **Lab 1 Group Members and My Contribution**: Jessica Stockham (me), Heaven Klair, Josie Ruggieri. In this group project, I did nearly all the coding and report writing. I wrote code to clean the data and conduct the statistical tests. Other group members contributed visualizations and brainstorming. 
 
-**Lab 2 Group Members and My Contribution**: Jessica Stockham (me), Derrick Chan-Sew, Jammy Chan (Chi Hung). In this group project, I authored the final report, including a detailed discussions and limitations section. I also wrote code to clean/prepare predictive features and test the statistical assumptions in our model. Other group members wrote the code to extract the data, store necessary variables, perform exploratory data analysis, and run the linear regression models. We also produced both a slide presentation with our results.
+**Lab 2 Group Members and My Contribution**: Jessica Stockham (me), Derrick Chan-Sew, Jammy Chan (Chi Hung). In this group project, I authored the final report, including a detailed discussions and limitations section. I also wrote code to clean/prepare predictive features and test the statistical assumptions in our model. Other group members wrote the code to extract the data, store necessary variables, perform exploratory data analysis, and run the linear regression models. We also produced a slide presentation with our results.
 # Lab 1 Abstract
 Just like the COVID-19, the US 2020 elections raised unprecedented challenges for its citizens. While the
 nation was still recovering from the pandemic, the Americans, amongst the turmoil, stood up to cast their
